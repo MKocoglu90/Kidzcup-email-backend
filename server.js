@@ -276,6 +276,12 @@ function empfaengerFuer(ereignis, anmeldung) {
   return anmeldung.email;
 }
 
+// Herkunftshinweis unter Mails an Vereine/Trainer (nicht unter den internen Admin-Mails)
+function signaturFuer(ereignis) {
+  if (ereignis === "neue_anmeldung" || ereignis === "teilnahme_abgesagt") return "";
+  return "\n\n--\nDiese Turnierplattform wurde von HaYuTech entwickelt – Connecting Potential.\nhttps://hayutech.de";
+}
+
 app.post("/webhook", pruefeSecret, async (req, res) => {
   const { ereignis, anmeldung, turnier, weitere, vonTurnier } = req.body || {};
 
@@ -317,7 +323,7 @@ app.post("/webhook", pruefeSecret, async (req, res) => {
         from: FROM_EMAIL,
         to: [empfaenger],
         subject: mail.betreff,
-        text: mail.text,
+        text: mail.text + signaturFuer(ereignis),
       }),
     });
 
