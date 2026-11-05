@@ -3,6 +3,8 @@
 // Ein winziger Server mit genau einem Zweck: Wenn die KIDZCUP-App ein Ereignis meldet
 // (Zahlung bestätigt, abgelehnt, Erinnerung, Warteliste-Aufnahme, WhatsApp-Gruppe), verschickt dieser
 // Server automatisch eine E-Mail über den Anbieter Resend (https://resend.com).
+// Neu: "uebertragen" - Info an den Trainer, wenn seine Anmeldung auf ein anderes Turnier übertragen wurde.
+// Neu: "eingang_bestaetigung" - Eingangsbestätigung direkt nach der Anmeldung an den Trainer.
 //
 // Warum überhaupt ein eigener Server?
 // Ein API-Schlüssel für den Mail-Versand darf NIEMALS im Browser-Code der App stehen,
@@ -98,7 +100,7 @@ const STATUS_LABEL_KURZ = {
   abgelehnt: "Abgelehnt",
 };
 
-function baueMail(ereignis, anmeldung, turnier) {
+function baueMail(ereignis, anmeldung, turnier, weitere = [], vonTurnier = null) {
   const frist = anmeldung.frist ? formatDatumZeit(anmeldung.frist) : "";
   const termin = turnier ? `${turnier.datum} in ${turnier.ort}` : "";
   const gruss = "Sportliche Grüße\nDein KIDZCUP-Team";
@@ -178,6 +180,59 @@ function baueMail(ereignis, anmeldung, turnier) {
         `Hier könnt ihr mit ${anmeldung.verein} beitreten:\n${turnier?.whatsappGruppenlink || ""}\n\n` +
         `Hinweis: In der Gruppe ist eure Handynummer für die anderen Mitglieder sichtbar. Der Beitritt ist freiwillig.\n\n${gruss}`,
     },
+    // Eingangsbestätigung direkt nach der Anmeldung - geht an den Trainer (Verein). Bei mehreren Teams in einer
+    // Anmeldung (bis zu 5) enthält sie alle Teams mit ihrem jeweiligen Anmeldecode in EINER Mail.
+    eingang_bestaetigung: (() => {
+      const alle = [anmeldung, ...(Array.isArray(weitere) ? weitere : [])].filter(Boolean);
+      const zeilen = alle.map((a) =>
+        `• ${a.verein} (${a.jugend || "-"}, Jahrgang ${a.jahrgang || "-"})\n` +
+        `  Anmeldecode: ${a.id}\n` +
+        `  Status: ${a.status === "warteliste" ? "Warteliste" : "Eingegangen – wird geprüft"}`
+      ).join("\n\n");
+      const hatWarteliste = alle.some((a) => a.status === "warteliste");
+      const hatPlatz = alle.some((a) => a.status !== "warteliste");
+      const mehrere = alle.length > 1;
+      return {
+        betreff: `Anmeldung eingegangen – ${turnier?.name || "KIDZCUP"}`,
+        text:
+          `Hallo ${anmeldung.trainer || ""},\n\n` +
+          `vielen Dank für eure Anmeldung zum Turnier "${turnier?.name}"${turnier?.datum ? ` (${formatDatumLang(turnier.datum)}${turnier?.ort ? ` in ${turnier.ort}` : ""})` : ""}. ` +
+          `${mehrere ? "Eure Anmeldungen sind" : "Eure Anmeldung ist"} bei uns eingegangen:\n\n` +
+          `${zeilen}\n\n` +
+          (hatPlatz
+            ? `So geht es weiter: Wir prüfen die Anmeldung und melden uns per E-Mail. Sobald sie angenommen ist, habt ihr 3 Tage Zeit, ` +
+              `die Startgebühr${turnier?.preis ? ` von ${turnier.preis} €` : ""} zu zahlen. Erst mit der Zahlung ist die Teilnahme fest.\n\n`
+            : "") +
+          (hatWarteliste
+            ? `Hinweis: ${mehrere ? "Für Teams mit dem Status „Warteliste“" : "Das Turnier ist aktuell ausgebucht"} - ` +
+              `sobald ein Platz frei wird, rückt ihr automatisch nach und erhaltet dann eine E-Mail mit der Zahlungsfrist.\n\n`
+            : "") +
+          `Mit dem Anmeldecode könnt ihr den Stand jederzeit auf der Anmeldeseite einsehen. Bitte bewahrt ihn gut auf.\n\n${gruss}`,
+      };
+    })(),
+    // Anmeldung wurde vom Veranstalter auf ein anderes Turnier übertragen (z. B. von der Warteliste) - der Verein muss sich nicht neu anmelden.
+    uebertragen: (() => {
+      const neu = `"${turnier?.name}"${turnier?.datum ? ` (${formatDatumLang(turnier.datum)}${turnier?.ort ? ` in ${turnier.ort}` : ""})` : ""}`;
+      const alt = vonTurnier?.name ? `"${vonTurnier.name}"${vonTurnier.datum ? ` (${formatDatumLang(vonTurnier.datum)})` : ""}` : "dem ursprünglichen Turnier";
+      const statusText =
+        anmeldung.status === "warteliste"
+          ? `Dieses Turnier ist ebenfalls schon voll, ihr steht dort auf der Warteliste. Sobald ein Platz frei wird, rückt ihr automatisch nach und erhaltet dann eine E-Mail mit der Zahlungsfrist.\n\n`
+          : anmeldung.status === "ausstehend"
+            ? `Euer Platz ist reserviert. Bitte zahlt die Startgebühr von ${turnier?.preis} € bis spätestens ${frist}.\n\n` +
+              bauZahlungshinweis(anmeldung, turnier) +
+              `Ohne fristgerechte Zahlung können wir die Teilnahme leider nicht bestätigen.\n\n`
+            : `Wir prüfen eure Anmeldung und melden uns per E-Mail. Sobald sie angenommen ist, habt ihr 3 Tage Zeit, die Startgebühr${turnier?.preis ? ` von ${turnier.preis} €` : ""} zu zahlen.\n\n`;
+      return {
+        betreff: `Eure Anmeldung wurde übertragen – ${turnier?.name || "KIDZCUP"}`,
+        text:
+          `Hallo ${anmeldung.trainer || ""},\n\n` +
+          `ihr standet für ${alt} auf der Warteliste. Damit ihr euch nicht neu anmelden müsst, haben wir die Anmeldung von ${anmeldung.verein} ` +
+          `(${anmeldung.jugend || "-"}, Jahrgang ${anmeldung.jahrgang || "-"}) auf folgendes Turnier übertragen:\n\n${neu}\n\n` +
+          statusText +
+          `Euer Anmeldecode bleibt unverändert: ${anmeldung.id}\n\n` +
+          `Falls das Datum oder der Ort für euch nicht passt, meldet euch bitte kurz bei uns.\n\n${gruss}`,
+      };
+    })(),
     // Anders als die übrigen Vorlagen geht diese an EUCH (den Veranstalter), nicht an den Verein.
     neue_anmeldung: {
       betreff: `Neue Anmeldung: ${anmeldung.verein} – ${turnier?.name || "KIDZCUP"}`,
@@ -189,7 +244,7 @@ function baueMail(ereignis, anmeldung, turnier) {
         `Jahrgang/Jugend: ${anmeldung.jahrgang} / ${anmeldung.jugend}\n` +
         `E-Mail: ${anmeldung.email}\n` +
         `Telefon: ${anmeldung.telefon}\n` +
-        `Status: ${anmeldung.status === "warteliste" ? "Warteliste" : "Ausstehend (Zahlungsfrist " + frist + ")"}\n\n` +
+        `Status: ${anmeldung.status === "warteliste" ? "Warteliste" : "Neu eingegangen – bitte im Admin-Bereich prüfen und annehmen"}\n\n` +
         `Anmeldecode: ${anmeldung.id}`,
     },
     // Geht ebenfalls an EUCH, nicht an den Verein - der Verein hat sich ja gerade selbst abgemeldet.
@@ -222,7 +277,7 @@ function empfaengerFuer(ereignis, anmeldung) {
 }
 
 app.post("/webhook", pruefeSecret, async (req, res) => {
-  const { ereignis, anmeldung, turnier } = req.body || {};
+  const { ereignis, anmeldung, turnier, weitere, vonTurnier } = req.body || {};
 
   if (!ereignis || !anmeldung) {
     return res.status(400).json({ fehler: "ereignis und anmeldung sind erforderlich." });
@@ -232,7 +287,7 @@ app.post("/webhook", pruefeSecret, async (req, res) => {
     return res.status(400).json({ fehler: "Gültiger WhatsApp-Gruppenlink fehlt." });
   }
 
-  const mail = baueMail(ereignis, anmeldung, turnier);
+  const mail = baueMail(ereignis, anmeldung, turnier, weitere, vonTurnier);
   if (!mail) {
     return res.status(400).json({ fehler: `Unbekanntes Ereignis: ${ereignis}` });
   }
@@ -281,8 +336,4 @@ app.post("/webhook", pruefeSecret, async (req, res) => {
 
 app.get("/", (req, res) => {
   res.send("KIDZCUP E-Mail-Backend läuft. Endpunkt: POST /webhook");
-});
-
-app.listen(PORT, () => {
-  console.log(`KIDZCUP E-Mail-Backend läuft auf Port ${PORT}`);
 });
