@@ -343,3 +343,7 @@ app.post("/webhook", pruefeSecret, async (req, res) => {
 app.get("/", (req, res) => {
   res.send("KIDZCUP E-Mail-Backend läuft. Endpunkt: POST /webhook");
 });
+
+app.listen(PORT, () => {
+  console.log(`KIDZCUP E-Mail-Backend läuft auf Port ${PORT}`);
+});
