@@ -159,6 +159,15 @@ function baueMail(ereignis, anmeldung, turnier, weitere = [], vonTurnier = null)
         bauZahlungshinweis(anmeldung, turnier) +
         `Ohne fristgerechte Zahlung wird der Platz erneut freigegeben.\n\n${gruss}`,
     },
+    auf_warteliste_gesetzt: {
+      betreff: `Eure Anmeldung steht jetzt auf der Warteliste – ${turnier?.name || "KIDZCUP"}`,
+      text:
+        `Hallo ${anmeldung.trainer || ""},\n\n` +
+        `leider müssen wir die Anmeldung von ${anmeldung.verein} für "${turnier?.name}" (${termin}) nachträglich wieder auf die Warteliste setzen.\n\n` +
+        (anmeldung.warBezahlt ? `Eine bereits gezahlte Startgebühr erstatten wir euch bzw. verrechnen sie mit euch - wir melden uns dazu direkt bei euch.\n\n` : "") +
+        `Sobald wieder ein Platz frei wird, rückt ihr automatisch nach und erhaltet eine E-Mail.\n\n` +
+        `Bei Rückfragen meldet euch gerne kurz bei uns.\n\n${gruss}`,
+    },
     frist_verpasst_warteliste: {
       betreff: `Auf Warteliste – Zahlungsfrist verpasst (${turnier?.name || "KIDZCUP"})`,
       text:
@@ -215,7 +224,9 @@ function baueMail(ereignis, anmeldung, turnier, weitere = [], vonTurnier = null)
       const neu = `"${turnier?.name}"${turnier?.datum ? ` (${formatDatumLang(turnier.datum)}${turnier?.ort ? ` in ${turnier.ort}` : ""})` : ""}`;
       const alt = vonTurnier?.name ? `"${vonTurnier.name}"${vonTurnier.datum ? ` (${formatDatumLang(vonTurnier.datum)})` : ""}` : "dem ursprünglichen Turnier";
       const statusText =
-        anmeldung.status === "warteliste"
+        anmeldung.status === "bestaetigt"
+          ? `Eure Teilnahme bleibt bestätigt. Eine bereits gezahlte Startgebühr verrechnen wir intern bzw. überweisen sie bei Bedarf zurück - ihr müsst nichts weiter tun.\n\n`
+          : anmeldung.status === "warteliste"
           ? `Dieses Turnier ist ebenfalls schon voll, ihr steht dort auf der Warteliste. Sobald ein Platz frei wird, rückt ihr automatisch nach und erhaltet dann eine E-Mail mit der Zahlungsfrist.\n\n`
           : anmeldung.status === "ausstehend"
             ? `Euer Platz ist reserviert. Bitte zahlt die Startgebühr von ${turnier?.preis} € bis spätestens ${frist}.\n\n` +
@@ -226,8 +237,8 @@ function baueMail(ereignis, anmeldung, turnier, weitere = [], vonTurnier = null)
         betreff: `Eure Anmeldung wurde übertragen – ${turnier?.name || "KIDZCUP"}`,
         text:
           `Hallo ${anmeldung.trainer || ""},\n\n` +
-          `ihr standet für ${alt} auf der Warteliste. Damit ihr euch nicht neu anmelden müsst, haben wir die Anmeldung von ${anmeldung.verein} ` +
-          `(${anmeldung.jugend || "-"}, Jahrgang ${anmeldung.jahrgang || "-"}) auf folgendes Turnier übertragen:\n\n${neu}\n\n` +
+          `wir haben die Anmeldung von ${anmeldung.verein} (${anmeldung.jugend || "-"}, Jahrgang ${anmeldung.jahrgang || "-"}) von ${alt} ` +
+          `auf folgendes Turnier übertragen, damit ihr euch nicht neu anmelden müsst:\n\n${neu}\n\n` +
           statusText +
           `Euer Anmeldecode bleibt unverändert: ${anmeldung.id}\n\n` +
           `Falls das Datum oder der Ort für euch nicht passt, meldet euch bitte kurz bei uns.\n\n${gruss}`,
