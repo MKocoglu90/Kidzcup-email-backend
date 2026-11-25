@@ -67,7 +67,7 @@ Das Webhook-Secret steht zwangsläufig im Browser-Code der KIDZCUP-App und ist d
 | Variable | Wert |
 |---|---|
 | `SUPABASE_URL` | URL des KIDZCUP-Supabase-Projekts |
-| `SUPABASE_SERVICE_ROLE_KEY` | service_role-Schlüssel dieses Projekts (**geheim**, nur im Render-Dashboard eintragen) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret key (`sb_secret_…`) oder alter service_role-Schlüssel dieses Projekts (**geheim**, nur im Render-Dashboard eintragen) |
 | `ALLOWED_ORIGINS` | optional, Standard: `https://anmeldung.kidzcup.de,https://kidzcup.vercel.app,https://kidzcup-hayutech.vercel.app` |
 
 Sind beide Supabase-Variablen gesetzt, übernimmt der Server aus einer Anfrage nur noch die ID der Anmeldung und prüfbare Werte (Status aus fester Liste, Frist als gültiges Datum, Ja/Nein). Empfänger, Verein, Trainer, Turnier, Zahlungslink, IBAN und WhatsApp-Link kommen ausschließlich aus der Datenbank. Unbekannte Anmeldungen → 404 (die App fällt dann auf ihren mailto-Weg zurück). Zusätzlich: dieselbe Mail (Ereignis + Anmeldung) höchstens einmal in 10 Minuten, und Anfragen von fremden Webseiten werden abgewiesen.
