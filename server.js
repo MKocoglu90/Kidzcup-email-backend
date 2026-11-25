@@ -31,6 +31,16 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "KIDZCUP <turniere@deine-domain.de>
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || ""; // eure eigene Adresse, für "neue Anmeldung"-Benachrichtigungen
 
+// Sicherheit (25.11.2026): Das Webhook-Secret steht zwangsläufig im Browser-Code der App und ist damit öffentlich.
+// Deshalb gilt: Sind SUPABASE_URL und SUPABASE_SERVICE_ROLE_KEY gesetzt ("strenger Modus"), übernimmt der Server
+// aus der Anfrage nur noch IDs und prüfbare Werte. Empfänger, Vereins-/Trainernamen, Turnier, Zahlungslink, IBAN
+// und WhatsApp-Link kommen ausschließlich aus der KIDZCUP-Datenbank. Ohne diese Variablen: altes Verhalten.
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const STRENG = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const ERLAUBTE_HERKUNFT = (process.env.ALLOWED_ORIGINS || "https://anmeldung.kidzcup.de,https://kidzcup.vercel.app,https://kidzcup-hayutech.vercel.app")
+  .split(",").map((o) => o.trim()).filter(Boolean);
+
 const app = express();
 app.use(express.json());
 
@@ -38,7 +48,14 @@ app.use(express.json());
 // diesen Server per fetch() aufzurufen. Ohne das blockiert der Browser die Anfrage
 // stillschweigend, noch bevor sie hier überhaupt ankommt.
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  const herkunft = req.header("Origin") || "";
+  if (ERLAUBTE_HERKUNFT.includes(herkunft)) {
+    res.header("Access-Control-Allow-Origin", herkunft);
+    res.header("Vary", "Origin");
+  } else if (req.method === "POST" && herkunft) {
+    // Fremde Webseiten dürfen den Webhook nicht aus dem Browser heraus auslösen.
+    return res.status(403).json({ fehler: "Herkunft nicht erlaubt." });
+  }
   res.header("Access-Control-Allow-Headers", "Content-Type, X-Webhook-Secret");
   res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
   if (req.method === "OPTIONS") {
@@ -53,6 +70,66 @@ function pruefeSecret(req, res, next) {
     return res.status(401).json({ fehler: "Ungültiges oder fehlendes Webhook-Secret." });
   }
   next();
+}
+
+// --- Daten aus der KIDZCUP-Datenbank (nur im strengen Modus) -------------------------------------
+async function dbAbfrage(tabelle, filter) {
+  const url = `${SUPABASE_URL}/rest/v1/${tabelle}?${filter}&select=*`;
+  const antwort = await fetch(url, {
+    headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+  });
+  if (!antwort.ok) throw new Error(`Datenbank ${tabelle}: ${antwort.status}`);
+  return antwort.json();
+}
+
+const idFilter = (id) => `id=eq.${encodeURIComponent(String(id))}`;
+
+async function ladeAnmeldung(id, versuche = [0, 1000, 2500]) {
+  if (!id) return null;
+  // Direkt nach dem Anlegen kann die Zeile noch nicht sichtbar sein – kurz nachfragen.
+  for (const warte of versuche) {
+    if (warte) await new Promise((r) => setTimeout(r, warte));
+    const [zeile] = await dbAbfrage("anmeldungen", idFilter(id));
+    if (zeile) return zeile;
+  }
+  return null;
+}
+
+async function ladeTurnier(id) {
+  if (!id) return null;
+  const [t] = await dbAbfrage("turniere", idFilter(id));
+  if (!t) return null;
+  const [gruppe] = await dbAbfrage("turnier_whatsapp_gruppen", `turnier_id=eq.${encodeURIComponent(String(id))}`);
+  return {
+    id: t.id, name: t.name, datum: t.datum, ort: t.ort, preis: t.preis,
+    zahlLink: t.zahl_link || "", iban: t.iban || "", kontoinhaber: t.kontoinhaber || "",
+    whatsappGruppenlink: gruppe?.link || "",
+  };
+}
+
+// Statuswerte laut STATUS_LABEL und DB (Stand 25.11.2026).
+const STATUS_ERLAUBT = new Set(["eingegangen", "ausstehend", "zahlung_gemeldet", "bestaetigt", "warteliste", "abgelaufen", "abgelehnt"]);
+const gueltigesDatum = (v) => (v && !Number.isNaN(Date.parse(v)) ? v : null);
+
+// Baut die Anmeldung für die Mail: Textinhalte aus der DB, aus der Anfrage nur prüfbare Werte.
+function mitPruefbarenWerten(db, ausAnfrage = {}) {
+  return {
+    ...db,
+    status: STATUS_ERLAUBT.has(ausAnfrage.status) ? ausAnfrage.status : db.status,
+    frist: gueltigesDatum(ausAnfrage.frist) || db.frist,
+    warBezahlt: ausAnfrage.warBezahlt === true,
+    gebuehrenfrei: typeof db.gebuehrenfrei === "boolean" ? db.gebuehrenfrei : ausAnfrage.gebuehrenfrei === true,
+  };
+}
+
+// Dublettenschutz: dieselbe Mail (Ereignis + Anmeldung) höchstens einmal in 10 Minuten.
+const zuletztGesendet = new Map();
+function istDublette(schluessel) {
+  const jetzt = Date.now();
+  for (const [k, t] of zuletztGesendet) if (jetzt - t > 10 * 60 * 1000) zuletztGesendet.delete(k);
+  if (zuletztGesendet.has(schluessel)) return true;
+  zuletztGesendet.set(schluessel, jetzt);
+  return false;
 }
 
 function formatDatumZeit(ts) {
@@ -294,10 +371,37 @@ function signaturFuer(ereignis) {
 }
 
 app.post("/webhook", pruefeSecret, async (req, res) => {
-  const { ereignis, anmeldung, turnier, weitere, vonTurnier } = req.body || {};
+  const roh = req.body || {};
+  const ereignis = roh.ereignis;
+  let { anmeldung, turnier, weitere, vonTurnier } = roh;
 
   if (!ereignis || !anmeldung) {
     return res.status(400).json({ fehler: "ereignis und anmeldung sind erforderlich." });
+  }
+
+  if (STRENG) {
+    try {
+      const dbAnmeldung = await ladeAnmeldung(anmeldung.id);
+      if (!dbAnmeldung) return res.status(404).json({ fehler: "Anmeldung nicht gefunden." });
+      anmeldung = mitPruefbarenWerten(dbAnmeldung, anmeldung);
+      turnier = await ladeTurnier(dbAnmeldung.turnier_id);
+      // Weitere Teams derselben Anmeldung: nur echte Anmeldungen mit derselben Mailadresse.
+      const weitereIds = Array.isArray(weitere) ? weitere.map((w) => w?.id).filter(Boolean).slice(0, 10) : [];
+      const geladen = [];
+      for (const id of weitereIds) {
+        const w = await ladeAnmeldung(id);
+        if (w && (w.email || "").toLowerCase() === (dbAnmeldung.email || "").toLowerCase()) geladen.push(w);
+      }
+      weitere = geladen;
+      vonTurnier = vonTurnier?.id ? await ladeTurnier(vonTurnier.id) : null;
+    } catch (e) {
+      console.error("Datenbankabfrage fehlgeschlagen:", e);
+      return res.status(502).json({ fehler: "Daten konnten nicht geprüft werden." });
+    }
+  }
+
+  if (istDublette(`${ereignis}:${anmeldung.id || anmeldung.email}`)) {
+    return res.status(200).json({ status: "bereits_gesendet" });
   }
 
   if (ereignis === "whatsapp_gruppe" && !WHATSAPP_GRUPPENLINK_MUSTER.test(turnier?.whatsappGruppenlink || "")) {
@@ -356,5 +460,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`KIDZCUP E-Mail-Backend läuft auf Port ${PORT}`);
+  console.log(`KIDZCUP E-Mail-Backend läuft auf Port ${PORT} – Modus: ${STRENG ? "streng (Daten aus der DB)" : "Übergang (Daten aus der Anfrage)"}`);
 });

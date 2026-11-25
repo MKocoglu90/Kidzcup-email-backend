@@ -59,3 +59,17 @@ nichts, wenn der Server mal kurz down ist.
 - `RESEND_API_KEY` niemals ins Git-Repository committen – nur über Umgebungsvariablen setzen.
 - Dieses Backend ist bewusst minimal gehalten (ein Endpunkt, eine Aufgabe). Für den echten Produktivbetrieb
   würde ich zusätzlich Rate-Limiting und Logging/Monitoring ergänzen.
+
+## Sicherheit: strenger Modus (seit 25.11.2026)
+
+Das Webhook-Secret steht zwangsläufig im Browser-Code der KIDZCUP-App und ist damit öffentlich. Damit niemand über den Webhook gefälschte Mails (falscher Zahlungslink, falsche IBAN, fremde Empfänger) im Namen von KIDZCUP verschicken kann, gibt es den **strengen Modus**:
+
+| Variable | Wert |
+|---|---|
+| `SUPABASE_URL` | URL des KIDZCUP-Supabase-Projekts |
+| `SUPABASE_SERVICE_ROLE_KEY` | service_role-Schlüssel dieses Projekts (**geheim**, nur im Render-Dashboard eintragen) |
+| `ALLOWED_ORIGINS` | optional, Standard: `https://anmeldung.kidzcup.de,https://kidzcup.vercel.app,https://kidzcup-hayutech.vercel.app` |
+
+Sind beide Supabase-Variablen gesetzt, übernimmt der Server aus einer Anfrage nur noch die ID der Anmeldung und prüfbare Werte (Status aus fester Liste, Frist als gültiges Datum, Ja/Nein). Empfänger, Verein, Trainer, Turnier, Zahlungslink, IBAN und WhatsApp-Link kommen ausschließlich aus der Datenbank. Unbekannte Anmeldungen → 404 (die App fällt dann auf ihren mailto-Weg zurück). Zusätzlich: dieselbe Mail (Ereignis + Anmeldung) höchstens einmal in 10 Minuten, und Anfragen von fremden Webseiten werden abgewiesen.
+
+Ohne die beiden Variablen läuft der Übergangsmodus (altes Verhalten). Welcher Modus aktiv ist, steht beim Start im Log.
