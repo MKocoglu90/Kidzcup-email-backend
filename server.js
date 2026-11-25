@@ -76,7 +76,10 @@ function pruefeSecret(req, res, next) {
 async function dbAbfrage(tabelle, filter) {
   const url = `${SUPABASE_URL}/rest/v1/${tabelle}?${filter}&select=*`;
   const antwort = await fetch(url, {
-    headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+    // Neue Supabase-Schlüssel (sb_secret_…) nur im apikey-Header; alte JWT-Schlüssel (service_role) zusätzlich als Bearer.
+    headers: SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_")
+      ? { apikey: SUPABASE_SERVICE_ROLE_KEY }
+      : { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
   });
   if (!antwort.ok) throw new Error(`Datenbank ${tabelle}: ${antwort.status}`);
   return antwort.json();
