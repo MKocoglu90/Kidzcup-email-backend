@@ -36,7 +36,17 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || ""; // eure eigene Adresse, für 
 // aus der Anfrage nur noch IDs und prüfbare Werte. Empfänger, Vereins-/Trainernamen, Turnier, Zahlungslink, IBAN
 // und WhatsApp-Link kommen ausschließlich aus der KIDZCUP-Datenbank. Ohne diese Variablen: altes Verhalten.
 const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+// Leerzeichen/Zeilenumbrüche entfernen: beim Kopieren aus dem Dashboard rutschen sie leicht mit hinein.
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").replace(/\s+/g, "");
+
+// Fehlermeldungen dürfen den Schlüssel nie enthalten (Node zitiert ungültige Header-Werte wörtlich).
+function ohneGeheimnis(e) {
+  let text = e instanceof Error ? e.message : String(e);
+  if (SUPABASE_SERVICE_ROLE_KEY) text = text.split(SUPABASE_SERVICE_ROLE_KEY).join("[SCHLÜSSEL]");
+  const roh = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (roh) for (const teil of roh.split(/\s+/).filter((t) => t.length > 6)) text = text.split(teil).join("[SCHLÜSSEL]");
+  return text.replace(/sb_secret_[A-Za-z0-9_\-]+/g, "[SCHLÜSSEL]").replace(/eyJ[A-Za-z0-9_\-.]{20,}/g, "[SCHLÜSSEL]");
+}
 const STRENG = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 const ERLAUBTE_HERKUNFT = (process.env.ALLOWED_ORIGINS || "https://anmeldung.kidzcup.de,https://kidzcup.vercel.app,https://kidzcup-hayutech.vercel.app")
   .split(",").map((o) => o.trim()).filter(Boolean);
@@ -398,7 +408,7 @@ app.post("/webhook", pruefeSecret, async (req, res) => {
       weitere = geladen;
       vonTurnier = vonTurnier?.id ? await ladeTurnier(vonTurnier.id) : null;
     } catch (e) {
-      console.error("Datenbankabfrage fehlgeschlagen:", e);
+      console.error("Datenbankabfrage fehlgeschlagen:", ohneGeheimnis(e));
       return res.status(502).json({ fehler: "Daten konnten nicht geprüft werden." });
     }
   }
